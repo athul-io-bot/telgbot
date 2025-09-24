@@ -13,29 +13,26 @@ def parse_file_parameters(text):
         'series_name': '',
         'season': '',
         'episode': '',
-        'episode_name': '',
         'resolution': '480p',
         'caption': ''
     }
     
     # Try different parsing formats
     patterns = [
-        # Format 1: /addfile Series Name | S01E01 | Episode Name | 720p
-        r'(.+?)\s*\|\s*([Ss]?\d+[Ee]\d+)\s*\|\s*(.+?)\s*\|\s*(\d+p)',
-        # Format 2: /addfile Series Name | Season 1 | Episode 1 | Episode Name | 1080p
-        r'(.+?)\s*\|\s*[Ss]eason\s*(\d+)\s*\|\s*[Ee]pisode\s*(\d+)\s*\|\s*(.+?)\s*\|\s*(\d+p)',
-        # Format 3: /addfile Series Name | S01 | E01 | Episode Name | 720p
-        r'(.+?)\s*\|\s*([Ss]\d+)\s*\|\s*([Ee]\d+)\s*\|\s*(.+?)\s*\|\s*(\d+p)',
+        # Format 1: /addfile Series Name | S01E01 | 720p
+        r'(.+?)\s*\|\s*([Ss]?\d+[Ee]\d+)\s*\|\s*(\d+p)',
+        # Format 2: /addfile Series Name | Season 1 | Episode 1 | 1080p
+        r'(.+?)\s*\|\s*[Ss]eason\s*(\d+)\s*\|\s*[Ee]pisode\s*(\d+)\s*\|\s*(\d+p)',
+        # Format 3: /addfile Series Name | S01 | E01 | 720p
+        r'(.+?)\s*\|\s*([Ss]\d+)\s*\|\s*([Ee]\d+)\s*\|\s*(\d+p)',
         # Format 4: Simple format: /addfile Series Name | Resolution
         r'(.+?)\s*\|\s*(\d+p)',
-        # Format 5: With episode name only: /addfile Series Name | Episode Name | 720p
-        r'(.+?)\s*\|\s*(.+?)\s*\|\s*(\d+p)'
     ]
     
     for i, pattern in enumerate(patterns):
         match = re.search(pattern, text, re.IGNORECASE)
         if match:
-            if i == 0:  # Format 1: Series | S01E01 | Name | Resolution
+            if i == 0:  # Format 1: Series | S01E01 | Resolution
                 params['series_name'] = match.group(1).strip()
                 season_episode = match.group(2).upper()
                 # Extract season and episode from S01E01 format
@@ -43,33 +40,25 @@ def parse_file_parameters(text):
                 if se_match:
                     params['season'] = f"Season {int(se_match.group(1))}"
                     params['episode'] = f"Episode {int(se_match.group(2))}"
-                params['episode_name'] = match.group(3).strip()
-                params['resolution'] = match.group(4).strip()
+                params['resolution'] = match.group(3).strip()
                 
-            elif i == 1:  # Format 2: Series | Season 1 | Episode 1 | Name | Resolution
+            elif i == 1:  # Format 2: Series | Season 1 | Episode 1 | Resolution
                 params['series_name'] = match.group(1).strip()
                 params['season'] = f"Season {int(match.group(2))}"
                 params['episode'] = f"Episode {int(match.group(3))}"
-                params['episode_name'] = match.group(4).strip()
-                params['resolution'] = match.group(5).strip()
+                params['resolution'] = match.group(4).strip()
                 
-            elif i == 2:  # Format 3: Series | S01 | E01 | Name | Resolution
+            elif i == 2:  # Format 3: Series | S01 | E01 | Resolution
                 params['series_name'] = match.group(1).strip()
                 season = re.search(r'\d+', match.group(2)).group()
                 episode = re.search(r'\d+', match.group(3)).group()
                 params['season'] = f"Season {int(season)}"
                 params['episode'] = f"Episode {int(episode)}"
-                params['episode_name'] = match.group(4).strip()
-                params['resolution'] = match.group(5).strip()
+                params['resolution'] = match.group(4).strip()
                 
             elif i == 3:  # Format 4: Simple - Series | Resolution
                 params['series_name'] = match.group(1).strip()
                 params['resolution'] = match.group(2).strip()
-                
-            elif i == 4:  # Format 5: Series | Episode Name | Resolution
-                params['series_name'] = match.group(1).strip()
-                params['episode_name'] = match.group(2).strip()
-                params['resolution'] = match.group(3).strip()
             
             return params
     
@@ -78,8 +67,6 @@ def parse_file_parameters(text):
     if len(parts) >= 2:
         params['series_name'] = parts[0]
         params['resolution'] = parts[1]
-        if len(parts) >= 3:
-            params['episode_name'] = parts[2]
     
     return params
 
@@ -128,22 +115,18 @@ async def add_file(client, message: Message):
 📘 **Enhanced /addfile Usage:**
 
 **Format 1 (Recommended):**
-`/addfile Series Name | S01E01 | Episode Name | 720p`
+`/addfile Series Name | S01E01 | 720p`
 
 **Format 2:**
-`/addfile Series Name | Season 1 | Episode 1 | Episode Name | 1080p`
+`/addfile Series Name | Season 1 | Episode 1 | 1080p`
 
 **Format 3 (Simple):**
 `/addfile Series Name | 480p`
 
-**Format 4:**
-`/addfile Series Name | Episode Name | 720p`
-
 **Examples:**
-• `/addfile Breaking Bad | S01E01 | Pilot | 1080p`
-• `/addfile Game of Thrones | Season 1 | Episode 1 | Winter is Coming | 720p`
+• `/addfile Breaking Bad | S01E01 | 1080p`
+• `/addfile Game of Thrones | Season 1 | Episode 1 | 720p`
 • `/addfile Stranger Things | 480p`
-• `/addfile The Mandalorian | Chapter 1 | 1080p`
 
 📁 *Reply to a file when using this command*
         """
@@ -159,29 +142,27 @@ async def add_file(client, message: Message):
     if replied.document:
         file_id = replied.document.file_id
         file_size = format_file_size(replied.document.file_size)
-        caption = caption or replied.caption or replied.document.file_name
+        caption = replied.caption or replied.document.file_name or f"Document - {params['series_name']}"
     elif replied.video:
         file_id = replied.video.file_id
         file_size = format_file_size(replied.video.file_size)
         duration = get_duration(replied.video)
-        caption = caption or replied.caption or "Video File"
+        caption = replied.caption or "Video File"
     elif replied.audio:
         file_id = replied.audio.file_id
         file_size = format_file_size(replied.audio.file_size)
         duration = get_duration(replied.audio)
-        caption = caption or replied.caption or replied.audio.title or "Audio File"
+        caption = replied.caption or replied.audio.title or "Audio File"
     elif replied.animation:
         file_id = replied.animation.file_id
         file_size = format_file_size(replied.animation.file_size)
-        caption = caption or replied.caption or "Animation File"
+        caption = replied.caption or "Animation File"
     else:
         await message.reply("❌ Unsupported file type. Supported: document, video, audio, animation.")
         return
 
     # Build enhanced caption
     enhanced_caption_parts = []
-    if params['episode_name']:
-        enhanced_caption_parts.append(params['episode_name'])
     if params['season'] and params['episode']:
         enhanced_caption_parts.append(f"{params['season']} {params['episode']}")
     elif params['season']:
@@ -197,49 +178,20 @@ async def add_file(client, message: Message):
     enhanced_caption = " • ".join(enhanced_caption_parts) if enhanced_caption_parts else caption
 
     try:
-        # Send to database channel with enhanced metadata
-        db_caption = f"{params['series_name']}|{params['season']}|{params['episode']}|{params['episode_name']}|{params['resolution']}|{enhanced_caption}"
+        # Store the original file_id (don't forward to database channel)
+        # This fixes the forwarding issue - we use the original file_id
+        original_file_id = file_id
         
-        if replied.document:
-            db_msg = await client.send_document(
-                chat_id=DATABASE_CHANNEL,
-                document=file_id,
-                caption=db_caption
-            )
-            file_id = db_msg.document.file_id
-        elif replied.video:
-            db_msg = await client.send_video(
-                chat_id=DATABASE_CHANNEL,
-                video=file_id,
-                caption=db_caption
-            )
-            file_id = db_msg.video.file_id
-        elif replied.audio:
-            db_msg = await client.send_audio(
-                chat_id=DATABASE_CHANNEL,
-                audio=file_id,
-                caption=db_caption
-            )
-            file_id = db_msg.audio.file_id
-        elif replied.animation:
-            db_msg = await client.send_animation(
-                chat_id=DATABASE_CHANNEL,
-                animation=file_id,
-                caption=db_caption
-            )
-            file_id = db_msg.animation.file_id
-
         # Insert into database with enhanced fields
         cursor.execute("""
-            INSERT INTO files (series_name, season, episode, episode_name, resolution, file_id, caption, file_size, duration, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO files (series_name, season, episode, resolution, file_id, caption, file_size, duration, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             params['series_name'].strip(),
             params['season'],
             params['episode'],
-            params['episode_name'],
             params['resolution'],
-            file_id,
+            original_file_id,  # Use original file_id instead of forwarded one
             enhanced_caption,
             file_size,
             duration,
@@ -257,8 +209,6 @@ async def add_file(client, message: Message):
             success_msg += f"\n**Season:** {params['season']}"
         if params['episode']:
             success_msg += f"\n**Episode:** {params['episode']}"
-        if params['episode_name']:
-            success_msg += f"\n**Title:** {params['episode_name']}"
         if file_size:
             success_msg += f"\n**Size:** {file_size}"
         if duration:
@@ -269,4 +219,27 @@ async def add_file(client, message: Message):
 
     except Exception as e:
         logging.error(f"Error adding file: {e}")
-        await message.reply("⚠️ An error occurred while adding the file. Please try again later.")
+        await message.reply(f"⚠️ Error adding file: {str(e)}")
+
+@app.on_message(filters.command("viewfiles") & filters.private)
+async def view_files(client, message):
+    """Admin command to view files in database"""
+    if message.from_user.id not in ADMINS:
+        return
+    
+    try:
+        cursor.execute("SELECT series_name, resolution, COUNT(*) FROM files GROUP BY series_name, resolution")
+        results = cursor.fetchall()
+        
+        if not results:
+            await message.reply("📭 No files in database yet.")
+            return
+            
+        response = "📊 **Files in Database:**\n\n"
+        for series, resolution, count in results:
+            response += f"**{series}** - {resolution}: {count} files\n"
+            
+        await message.reply(response, parse_mode=enums.ParseMode.MARKDOWN)
+        
+    except Exception as e:
+        await message.reply(f"❌ Error: {e}")
