@@ -6,7 +6,7 @@ from database import cursor
 
 def format_episode_button(episode_data):
     """Format episode button with enhanced metadata"""
-    file_id, caption, season, episode, episode_name, resolution = episode_data
+    file_id, caption, season, episode, resolution = episode_data
     
     # Create a clean button label
     parts = []
@@ -15,22 +15,21 @@ def format_episode_button(episode_data):
     elif season:
         parts.append(season)
     elif episode:
-        parts.append(f"Ep {episode.replace('Episode', '').strip()}")
-    
-    if episode_name:
-        # Truncate long episode names
-        name = episode_name[:15] + "..." if len(episode_name) > 18 else episode_name
-        parts.append(name)
-    
-    if not parts:
+        ep_num = episode.replace('Episode', '').strip()
+        parts.append(f"Ep {ep_num}")
+    else:
         parts.append("Episode")
+    
+    # Add resolution if available
+    if resolution:
+        parts.append(resolution)
     
     return " • ".join(parts)
 
 # List episodes with pagination - Enhanced with metadata
 async def list_series(client, callback_query, encoded_name, series_name, resolution, page):
     cursor.execute("""
-        SELECT file_id, caption, season, episode, episode_name, resolution 
+        SELECT file_id, caption, season, episode, resolution 
         FROM files 
         WHERE series_name=? AND resolution=?
         ORDER BY 
@@ -139,16 +138,16 @@ async def back_to_resolutions(client, callback_query):
         reply_markup=InlineKeyboardMarkup(buttons)
     )
 
-# Send selected episode with enhanced info
+# Send selected episode with enhanced info - FIXED FILE SENDING
 @app.on_callback_query(filters.regex(r"file_(.+)"))
 async def send_episode(client, callback_query):
     file_id = callback_query.data.split("_")[1]
 
-    cursor.execute("SELECT caption, series_name, season, episode, episode_name, resolution FROM files WHERE file_id=?", (file_id,))
+    cursor.execute("SELECT caption, series_name, season, episode, resolution FROM files WHERE file_id=?", (file_id,))
     row = cursor.fetchone()
 
     if row:
-        caption, series_name, season, episode, episode_name, resolution = row
+        caption, series_name, season, episode, resolution = row
         
         # Build enhanced caption
         enhanced_caption = f"**{series_name}**"
@@ -159,26 +158,25 @@ async def send_episode(client, callback_query):
         elif episode:
             enhanced_caption += f"\n{episode}"
             
-        if episode_name:
-            enhanced_caption += f"\n**{episode_name}**"
-            
         enhanced_caption += f"\n📺 {resolution}"
         
         if caption:
             enhanced_caption += f"\n\n{caption}"
         
         try:
+            # Send file directly to user - FIXED: Use correct file_id
             await client.send_document(
                 chat_id=callback_query.from_user.id, 
                 document=file_id, 
                 caption=enhanced_caption,
                 parse_mode=enums.ParseMode.MARKDOWN
             )
-            await callback_query.answer("Episode sent to your DM! ✅")
+            await callback_query.answer("✅ Episode sent to your DM!")
         except Exception as e:
-            await callback_query.answer("Please start a conversation with me first!", show_alert=True)
+            logging.error(f"Error sending file: {e}")
+            await callback_query.answer("❌ Failed to send file. Please try again.", show_alert=True)
     else:
-        await callback_query.answer("File not found.", show_alert=True)
+        await callback_query.answer("❌ File not found in database.", show_alert=True)
 
 # Handle none callback (page number button)
 @app.on_callback_query(filters.regex(r"none"))
