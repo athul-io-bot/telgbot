@@ -12,7 +12,6 @@ def initialize_database():
         series_name TEXT,
         season TEXT,
         episode TEXT,
-        episode_name TEXT,
         resolution TEXT,
         file_id TEXT,
         caption TEXT,
