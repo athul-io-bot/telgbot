@@ -136,6 +136,7 @@ async def add_file(client, message: Message):
         return
 
     file_id = None
+    file_type = None
     caption = params['caption']
     file_size = ""
     duration = ""
@@ -143,20 +144,24 @@ async def add_file(client, message: Message):
     # Supported file types with enhanced metadata
     if replied.document:
         file_id = replied.document.file_id
+        file_type = "document"
         file_size = format_file_size(replied.document.file_size)
         caption = replied.caption or replied.document.file_name or f"Document - {params['series_name']}"
     elif replied.video:
         file_id = replied.video.file_id
+        file_type = "video"
         file_size = format_file_size(replied.video.file_size)
         duration = get_duration(replied.video)
         caption = replied.caption or "Video File"
     elif replied.audio:
         file_id = replied.audio.file_id
+        file_type = "audio"
         file_size = format_file_size(replied.audio.file_size)
         duration = get_duration(replied.audio)
         caption = replied.caption or replied.audio.title or "Audio File"
     elif replied.animation:
         file_id = replied.animation.file_id
+        file_type = "animation"
         file_size = format_file_size(replied.animation.file_size)
         caption = replied.caption or "Animation File"
     else:
@@ -180,53 +185,52 @@ async def add_file(client, message: Message):
     enhanced_caption = " • ".join(enhanced_caption_parts) if enhanced_caption_parts else caption
 
     try:
-        # Forward file to database channel WITHOUT caption to avoid parsing issues
-        db_file_id = None
+        # Forward file to database channel and store message_id
+        db_message = None
         
-        if replied.document:
-            db_msg = await client.send_document(
+        if file_type == "document":
+            db_message = await client.send_document(
                 chat_id=DATABASE_CHANNEL,
-                document=file_id
-                # No caption here - we'll store metadata in database only
+                document=file_id,
+                caption=f"STORAGE: {params['series_name']} | {params['resolution']}"
             )
-            db_file_id = db_msg.document.file_id
-        elif replied.video:
-            db_msg = await client.send_video(
+        elif file_type == "video":
+            db_message = await client.send_video(
                 chat_id=DATABASE_CHANNEL,
-                video=file_id
-                # No caption here
+                video=file_id,
+                caption=f"STORAGE: {params['series_name']} | {params['resolution']}"
             )
-            db_file_id = db_msg.video.file_id
-        elif replied.audio:
-            db_msg = await client.send_audio(
+        elif file_type == "audio":
+            db_message = await client.send_audio(
                 chat_id=DATABASE_CHANNEL,
-                audio=file_id
-                # No caption here
+                audio=file_id,
+                caption=f"STORAGE: {params['series_name']} | {params['resolution']}"
             )
-            db_file_id = db_msg.audio.file_id
-        elif replied.animation:
-            db_msg = await client.send_animation(
+        elif file_type == "animation":
+            db_message = await client.send_animation(
                 chat_id=DATABASE_CHANNEL,
-                animation=file_id
-                # No caption here
+                animation=file_id,
+                caption=f"STORAGE: {params['series_name']} | {params['resolution']}"
             )
-            db_file_id = db_msg.animation.file_id
 
-        if not db_file_id:
+        if not db_message:
             await message.reply("❌ Failed to forward file to database channel.")
             return
 
-        # Insert into database with the database channel file_id
+        # Insert into database with message_id for efficient copying
         cursor.execute("""
-            INSERT INTO files (series_name, season, episode, resolution, file_id, caption, file_size, duration, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO files (series_name, season, episode, resolution, file_id, 
+                             message_id, file_type, caption, file_size, duration, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             params['series_name'].strip(),
             params['season'],
             params['episode'],
             params['resolution'],
-            db_file_id,  # Use the file_id from database channel
-            enhanced_caption,  # This is the caption shown to users
+            file_id,  # Original file_id
+            db_message.id,  # Message ID in database channel
+            file_type,
+            enhanced_caption,
             file_size,
             duration,
             datetime.datetime.now().isoformat()
@@ -238,7 +242,8 @@ async def add_file(client, message: Message):
 
 **Series:** {params['series_name']}
 **Resolution:** {params['resolution']}
-**Database:** Forwarded to storage channel"""
+**Type:** {file_type.title()}
+**Database:** Stored in channel (Message ID: {db_message.id})"""
         
         if params['season']:
             success_msg += f"\n**Season:** {params['season']}"
@@ -263,7 +268,12 @@ async def view_files(client, message):
         return
     
     try:
-        cursor.execute("SELECT series_name, resolution, COUNT(*) FROM files GROUP BY series_name, resolution")
+        cursor.execute("""
+            SELECT series_name, resolution, file_type, COUNT(*) 
+            FROM files 
+            GROUP BY series_name, resolution, file_type
+            ORDER BY series_name, resolution
+        """)
         results = cursor.fetchall()
         
         if not results:
@@ -271,63 +281,38 @@ async def view_files(client, message):
             return
             
         response = "📊 **Files in Database:**\n\n"
-        for series, resolution, count in results:
-            response += f"**{series}** - {resolution}: {count} files\n"
+        current_series = ""
+        for series, resolution, file_type, count in results:
+            if series != current_series:
+                response += f"**{series}**\n"
+                current_series = series
+            response += f"  └ {resolution} ({file_type}): {count} files\n"
             
         await message.reply(response, parse_mode=enums.ParseMode.MARKDOWN)
         
     except Exception as e:
         await message.reply(f"❌ Error: {e}")
 
-@app.on_message(filters.command("testfile") & filters.private)
-async def test_file_send(client, message):
-    """Test command to verify file sending works"""
+@app.on_message(filters.command("cleanup") & filters.private)
+async def cleanup_files(client, message):
+    """Remove duplicate files from database"""
     if message.from_user.id not in ADMINS:
         return
     
     try:
-        # Get first file from database to test
-        cursor.execute("SELECT file_id, series_name FROM files LIMIT 1")
-        result = cursor.fetchone()
+        # Find and remove duplicate file entries
+        cursor.execute("""
+            DELETE FROM files 
+            WHERE id NOT IN (
+                SELECT MIN(id) 
+                FROM files 
+                GROUP BY series_name, season, episode, resolution, file_id
+            )
+        """)
+        duplicates_removed = cursor.rowcount
+        conn.commit()
         
-        if not result:
-            await message.reply("❌ No files in database to test.")
-            return
-            
-        file_id, series_name = result
-        
-        # Test sending the file
-        await client.send_document(
-            chat_id=message.chat.id,
-            document=file_id,
-            caption=f"TEST: {series_name}\nThis is a test file send."
-        )
-        await message.reply("✅ Test file sent successfully!")
+        await message.reply(f"✅ Cleanup completed. Removed {duplicates_removed} duplicate entries.")
         
     except Exception as e:
-        await message.reply(f"❌ Test failed: {e}")
-
-@app.on_message(filters.command("debugfile") & filters.private)
-async def debug_file(client, message):
-    """Debug command to check file storage"""
-    if message.from_user.id not in ADMINS:
-        return
-    
-    try:
-        cursor.execute("SELECT series_name, resolution, file_id, caption FROM files LIMIT 5")
-        results = cursor.fetchall()
-        
-        if not results:
-            await message.reply("❌ No files in database.")
-            return
-            
-        response = "🔧 **File Debug Info (First 5):**\n\n"
-        for series, resolution, file_id, caption in results:
-            response += f"**{series}** - {resolution}\n"
-            response += f"File ID: `{file_id[:20]}...`\n"
-            response += f"Caption: {caption}\n\n"
-            
-        await message.reply(response, parse_mode=enums.ParseMode.MARKDOWN)
-        
-    except Exception as e:
-        await message.reply(f"❌ Debug error: {e}")
+        await message.reply(f"❌ Cleanup error: {e}")

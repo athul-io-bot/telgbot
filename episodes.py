@@ -1,16 +1,16 @@
 from pyrogram import filters, enums
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from pyrogram.errors import UserIsBlocked, PeerIdInvalid
 from shared import app, ADMINS, DATABASE_CHANNEL
 from utils import decode_series_name
 from database import cursor
 import logging
 
-# Add logging
 logger = logging.getLogger(__name__)
 
 def format_episode_button(episode_data, index):
     """Format episode button with enhanced metadata"""
-    file_id, caption, season, episode, resolution = episode_data
+    file_id, caption, season, episode, resolution, file_type = episode_data
     
     # Create a clean button label
     parts = []
@@ -22,7 +22,17 @@ def format_episode_button(episode_data, index):
         ep_num = episode.replace('Episode', '').strip()
         parts.append(f"Ep {ep_num}")
     else:
-        parts.append(f"Episode {index + 1}")
+        parts.append(f"File {index + 1}")
+    
+    # Add file type icon
+    type_icons = {
+        'video': '🎬',
+        'document': '📄',
+        'audio': '🎵',
+        'animation': '🎞️'
+    }
+    icon = type_icons.get(file_type, '📁')
+    parts.append(icon)
     
     return " • ".join(parts)
 
@@ -30,7 +40,7 @@ def format_episode_button(episode_data, index):
 async def list_series(client, callback_query, encoded_name, series_name, resolution, page):
     try:
         cursor.execute("""
-            SELECT file_id, caption, season, episode, resolution 
+            SELECT file_id, caption, season, episode, resolution, file_type 
             FROM files 
             WHERE series_name=? AND resolution=?
             ORDER BY 
@@ -45,7 +55,7 @@ async def list_series(client, callback_query, encoded_name, series_name, resolut
             await callback_query.answer("No episodes available for this resolution.", show_alert=True)
             return
 
-        per_page = 5
+        per_page = 6  # Increased for better mobile experience
         start = page * per_page
         end = start + per_page
         page_files = files[start:end]
@@ -59,29 +69,32 @@ async def list_series(client, callback_query, encoded_name, series_name, resolut
 
         # Navigation buttons
         nav_buttons = []
-        if page > 0:
-            nav_buttons.append(InlineKeyboardButton("⬅️ Previous", callback_data=f"list_{encoded_name}_{resolution}_{page-1}"))
-        
-        # Show total pages info
         total_pages = (len(files) + per_page - 1) // per_page
-        nav_buttons.append(InlineKeyboardButton(f"📄 {page+1}/{total_pages}", callback_data="none"))
+        
+        if page > 0:
+            nav_buttons.append(InlineKeyboardButton("◀️ Prev", callback_data=f"list_{encoded_name}_{resolution}_{page-1}"))
+        
+        # Page indicator with total files info
+        nav_buttons.append(InlineKeyboardButton(f"📖 {page+1}/{total_pages}", callback_data="none"))
         
         if end < len(files):
-            nav_buttons.append(InlineKeyboardButton("Next ➡️", callback_data=f"list_{encoded_name}_{resolution}_{page+1}"))
+            nav_buttons.append(InlineKeyboardButton("Next ▶️", callback_data=f"list_{encoded_name}_{resolution}_{page+1}"))
 
         if nav_buttons:
             buttons.append(nav_buttons)
         
         # Back to resolutions button
-        buttons.append([InlineKeyboardButton("↩️ Back to Resolutions", callback_data=f"back_{encoded_name}")])
+        buttons.append([InlineKeyboardButton("🔙 Back to Resolutions", callback_data=f"back_{encoded_name}")])
 
         # Enhanced title with episode count
-        cursor.execute("SELECT COUNT(*) FROM files WHERE series_name=? AND resolution=?", (series_name, resolution))
-        episode_count = cursor.fetchone()[0]
+        episode_count = len(files)
+        start_ep = start + 1
+        end_ep = min(end, episode_count)
         
-        title = f"**{series_name}** - {resolution}\n"
-        title += f"📁 {episode_count} episode(s) available\n"
-        title += "Select an episode:"
+        title = f"**{series_name}**\n"
+        title += f"🎯 **Resolution:** {resolution}\n"
+        title += f"📂 **Episodes:** {start_ep}-{end_ep} of {episode_count}\n\n"
+        title += "Select an episode to download:"
         
         await callback_query.message.edit(
             title,
@@ -132,16 +145,19 @@ async def back_to_resolutions(client, callback_query):
         resolutions = cursor.fetchall()
         
         if not resolutions:
-            await callback_query.message.edit("❌ No resolutions available.")
+            await callback_query.message.edit("❌ No files available for this series.")
             return
             
         buttons = []
         for res, count in resolutions:
-            button_text = f"{res} ({count} episodes)"
+            button_text = f"{res} 📁 ({count} files)"
             buttons.append([InlineKeyboardButton(button_text, callback_data=f"res_{encoded_name}_{res}")])
         
+        # Add series list button
+        buttons.append([InlineKeyboardButton("📋 All Series", callback_data="series_list")])
+        
         await callback_query.message.edit(
-            f"**{series_name}**\nChoose a resolution:",
+            f"**{series_name}**\n\nAvailable resolutions:\n",
             parse_mode=enums.ParseMode.MARKDOWN,
             reply_markup=InlineKeyboardMarkup(buttons)
         )
@@ -150,118 +166,117 @@ async def back_to_resolutions(client, callback_query):
         logger.error(f"Error in back_to_resolutions: {e}")
         await callback_query.answer("Error going back.", show_alert=True)
 
-# Send selected episode with enhanced info - SIMPLIFIED VERSION
+# Send selected episode - FIXED VERSION
 @app.on_callback_query(filters.regex(r"^file_(.+)$"))
 async def send_episode(client, callback_query):
+    """Send an episode to the user by copying from database channel"""
     try:
         file_id = callback_query.data.split("_", 1)[1]
-
-        cursor.execute("SELECT caption, series_name, season, episode, resolution FROM files WHERE file_id=?", (file_id,))
+        
+        # Get file details from database including message_id
+        cursor.execute("""
+            SELECT message_id, caption, series_name, season, episode, resolution, file_type 
+            FROM files 
+            WHERE file_id=?
+        """, (file_id,))
         row = cursor.fetchone()
-
+        
         if not row:
             await callback_query.answer("❌ File not found in database.", show_alert=True)
             return
-
-        caption, series_name, season, episode, resolution = row
+            
+        message_id, caption, series_name, season, episode, resolution, file_type = row
         
         # Build enhanced caption
         enhanced_caption = f"**{series_name}**"
         if season and episode:
-            enhanced_caption += f"\n{season} {episode}"
+            enhanced_caption += f"\n🎬 {season} {episode}"
         elif season:
-            enhanced_caption += f"\n{season}"
+            enhanced_caption += f"\n🎬 {season}"
         elif episode:
-            enhanced_caption += f"\n{episode}"
+            enhanced_caption += f"\n🎬 {episode}"
             
-        enhanced_caption += f"\n📺 {resolution}"
+        enhanced_caption += f"\n📺 **Resolution:** {resolution}"
         
         if caption:
-            enhanced_caption += f"\n\n{caption}"
-
-        # SIMPLIFIED FILE SENDING - Just forward the file directly
+            enhanced_caption += f"\n\n📝 {caption}"
+        
+        enhanced_caption += f"\n\n✅ **Downloaded via @{client.me.username}**"
+        
         try:
-            # Forward the file from database channel to user
-            await client.forward_messages(
+            # Copy message from database channel to user (MOST RELIABLE METHOD)
+            await client.copy_message(
                 chat_id=callback_query.from_user.id,
                 from_chat_id=DATABASE_CHANNEL,
-                message_ids=[await get_message_id(client, file_id)],  # We need to get the message ID
-                disable_notification=True
+                message_id=message_id,
+                caption=enhanced_caption,
+                parse_mode=enums.ParseMode.MARKDOWN
             )
             await callback_query.answer("✅ Episode sent to your DM!")
             
-        except Exception as send_error:
-            logger.error(f"Failed to forward file: {send_error}")
-            # Alternative: try copying the file
-            try:
-                await client.copy_message(
-                    chat_id=callback_query.from_user.id,
-                    from_chat_id=DATABASE_CHANNEL,
-                    message_id=await get_message_id(client, file_id),
-                    caption=enhanced_caption,
-                    parse_mode=enums.ParseMode.MARKDOWN
-                )
-                await callback_query.answer("✅ Episode sent to your DM!")
-            except Exception as copy_error:
-                logger.error(f"Failed to copy file: {copy_error}")
-                await callback_query.answer("❌ Failed to send file. Please start the bot first!", show_alert=True)
+        except UserIsBlocked:
+            await callback_query.answer("❌ You blocked the bot. Please unblock and start chat.", show_alert=True)
+        except PeerIdInvalid:
+            await callback_query.answer("❌ Please start a chat with the bot first!", show_alert=True)
         
     except Exception as e:
-        logger.error(f"Error sending file: {e}")
-        await callback_query.answer("❌ Failed to send file. Please start a conversation with the bot first!", show_alert=True)
-
-async def get_message_id(client, file_id):
-    """Get message ID from file_id by searching in database channel"""
-    try:
-        # This is a simplified version - you might need to store message IDs in database
-        # For now, we'll use a workaround by trying to send the file directly
-        return None  # We'll handle this differently
-    except Exception as e:
-        logger.error(f"Error getting message ID: {e}")
-        return None
-
-# NEW: Simple file sending using direct file_id
-@app.on_callback_query(filters.regex(r"^simplefile_(.+)$"))
-async def send_episode_simple(client, callback_query):
-    """Simplified file sending using direct file_id"""
-    try:
-        file_id = callback_query.data.split("_", 1)[1]
-
-        cursor.execute("SELECT caption, series_name, season, episode, resolution FROM files WHERE file_id=?", (file_id,))
-        row = cursor.fetchone()
-
-        if not row:
-            await callback_query.answer("❌ File not found in database.", show_alert=True)
-            return
-
-        caption, series_name, season, episode, resolution = row
-        
-        # Build enhanced caption
-        enhanced_caption = f"**{series_name}**"
-        if season and episode:
-            enhanced_caption += f"\n{season} {episode}"
-        elif season:
-            enhanced_caption += f"\n{season}"
-        elif episode:
-            enhanced_caption += f"\n{episode}"
-            
-        enhanced_caption += f"\n📺 {resolution}"
-        
-        if caption:
-            enhanced_caption += f"\n\n{caption}"
-
-        # DIRECT FILE SENDING using file_id
-        await client.send_document(
-            chat_id=callback_query.from_user.id,
-            document=file_id,
-            caption=enhanced_caption,
-            parse_mode=enums.ParseMode.MARKDOWN
-        )
-        await callback_query.answer("✅ Episode sent to your DM!")
-        
-    except Exception as e:
-        logger.error(f"Error in simple file sending: {e}")
+        logger.error(f"Error sending episode: {e}")
         await callback_query.answer("❌ Failed to send file. Please start the bot first!", show_alert=True)
+
+# Series list handler
+@app.on_callback_query(filters.regex(r"^series_list$"))
+async def show_series_list(client, callback_query):
+    """Show list of all available series"""
+    try:
+        cursor.execute("""
+            SELECT series_name, COUNT(*) as file_count 
+            FROM files 
+            GROUP BY series_name 
+            ORDER BY series_name
+        """)
+        series_list = cursor.fetchall()
+        
+        if not series_list:
+            await callback_query.answer("❌ No series available yet.", show_alert=True)
+            return
+        
+        from utils import encode_series_name
+        
+        buttons = []
+        for series_name, file_count in series_list:
+            encoded_name = encode_series_name(series_name)
+            button_text = f"📺 {series_name} ({file_count} files)"
+            buttons.append([InlineKeyboardButton(button_text, callback_data=f"series_{encoded_name}")])
+        
+        # Add back button
+        buttons.append([InlineKeyboardButton("🔙 Back", callback_data="main_menu")])
+        
+        await callback_query.message.edit(
+            "**📺 Available Series**\n\nSelect a series to browse:",
+            parse_mode=enums.ParseMode.MARKDOWN,
+            reply_markup=InlineKeyboardMarkup(buttons)
+        )
+        
+    except Exception as e:
+        logger.error(f"Error showing series list: {e}")
+        await callback_query.answer("Error loading series list.", show_alert=True)
+
+# Main menu handler
+@app.on_callback_query(filters.regex(r"^main_menu$"))
+async def main_menu(client, callback_query):
+    """Return to main menu"""
+    try:
+        await callback_query.message.edit(
+            "**🎬 TV Series Bot**\n\nBrowse available series or use commands below:",
+            parse_mode=enums.ParseMode.MARKDOWN,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("📺 Browse Series", callback_data="series_list")],
+                [InlineKeyboardButton("ℹ️ Help", callback_data="help_menu")],
+                [InlineKeyboardButton("🔍 Search", callback_data="search_series")]
+            ])
+        )
+    except Exception as e:
+        await callback_query.answer("Welcome!", show_alert=True)
 
 # Handle none callback (page number button)
 @app.on_callback_query(filters.regex(r"^none$"))
