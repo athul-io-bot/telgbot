@@ -6,6 +6,7 @@ from shared import app, SPONSOR_CHANNEL, DATABASE_CHANNEL, MAIN_CHANNEL, ADMINS
 
 # Logging setup
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
+logger = logging.getLogger(__name__)
 
 # Import database connection and register handlers
 from database import conn, cursor
@@ -46,7 +47,7 @@ Supported file types: document, video, audio, animation.
 @app.on_message(filters.command("sendseries") & filters.private)
 async def send_series(client, message):
     if message.from_user.id not in ADMINS:
-        logging.warning(f"Unauthorized sendseries attempt by user {message.from_user.id}")
+        logger.warning(f"Unauthorized sendseries attempt by user {message.from_user.id}")
         await message.reply("❌ You are not authorized.")
         return
 
@@ -95,10 +96,10 @@ Click **Download** to browse episodes 👇"""
             )
             await message.reply("✅ Series post sent successfully!")
             
-        logging.info(f"Series '{series_name}' posted by admin {message.from_user.id}")
+        logger.info(f"Series '{series_name}' posted by admin {message.from_user.id}")
 
     except Exception as e:
-        logging.error(f"Error in sendseries: {e}")
+        logger.error(f"Error in sendseries: {e}")
         await message.reply("⚠ Error: Please use format: `/sendseries Series Name`")
 
 # Series selected by user - FIXED callback parsing
@@ -112,39 +113,57 @@ async def series_selected(client, callback_query):
         # Check if SPONSOR_CHANNEL is configured
         if not SPONSOR_CHANNEL:
             # If no sponsor channel, directly show resolutions
-            await show_resolutions(client, callback_query, encoded_name, series_name)
+            await episodes.list_series(client, callback_query, encoded_name, series_name, "", 0)
             return
+
+        # Check if user is already a member
+        try:
+            member = await client.get_chat_member(SPONSOR_CHANNEL, user_id)
+            if member.status not in ["left", "kicked"]:
+                # User is already a member, show resolutions directly
+                await episodes.show_resolutions(client, callback_query, encoded_name, series_name)
+                return
+        except Exception as e:
+            logger.warning(f"Could not check membership for {user_id}: {e}")
+            # Continue to show join button if check fails
 
         # Send message to user's DM first
         try:
-            # Get sponsor channel username without @
-            sponsor_username = SPONSOR_CHANNEL.replace('@', '') if SPONSOR_CHANNEL.startswith('@') else SPONSOR_CHANNEL
+            # Get sponsor channel info
+            chat = await client.get_chat(SPONSOR_CHANNEL)
+            invite_link = chat.invite_link if chat.invite_link else f"https://t.me/{chat.username}" if chat.username else SPONSOR_CHANNEL
             
             await client.send_message(
                 chat_id=user_id,
-                text=f"You selected *{series_name}*. Please join our channel first to access the episodes.",
+                text=f"**{series_name}**\n\nPlease join our channel first to access the episodes:",
                 parse_mode=enums.ParseMode.MARKDOWN,
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("Join Channel 🔊", url=f"https://t.me/{sponsor_username}")],
+                    [InlineKeyboardButton("Join Channel 🔊", url=invite_link)],
                     [InlineKeyboardButton("✅ I've Joined", callback_data=f"check_{encoded_name}")]
                 ])
             )
             await callback_query.answer("Check your DM for further steps!")
         except Exception as e:
             # If bot can't message user, send in current chat
-            logging.error(f"Can't DM user: {e}")
+            logger.error(f"Can't DM user {user_id}: {e}")
+            chat = await client.get_chat(SPONSOR_CHANNEL)
+            invite_link = chat.invite_link if chat.invite_link else f"https://t.me/{chat.username}" if chat.username else SPONSOR_CHANNEL
+            
             await callback_query.message.reply(
-                "Please start a conversation with me first, then try again.",
+                f"**{series_name}**\n\nPlease join our channel first, then tap 'I've Joined':",
+                parse_mode=enums.ParseMode.MARKDOWN,
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("Start Bot", url=f"https://t.me/{app.me.username}")]
+                    [InlineKeyboardButton("Join Channel 🔊", url=invite_link)],
+                    [InlineKeyboardButton("✅ I've Joined", callback_data=f"check_{encoded_name}")]
                 ])
             )
             await callback_query.answer()
             
     except Exception as e:
-        logging.error(f"Error in series_selected: {e}")
+        logger.error(f"Error in series_selected: {e}")
         await callback_query.answer("Error processing your request.", show_alert=True)
 
+# Add the show_resolutions function to main.py for better organization
 async def show_resolutions(client, callback_query, encoded_name, series_name):
     """Show available resolutions for a series"""
     try:
@@ -170,7 +189,7 @@ async def show_resolutions(client, callback_query, encoded_name, series_name):
         )
         
     except Exception as e:
-        logging.error(f"Error showing resolutions: {e}")
+        logger.error(f"Error showing resolutions: {e}")
         await callback_query.answer("Error loading resolutions.", show_alert=True)
 
 # Subscription check handler - FIXED callback parsing
@@ -193,11 +212,11 @@ async def check_subscription(client, callback_query):
             else:
                 await callback_query.answer("❌ You must join the channel first!", show_alert=True)
         except Exception as e:
-            logging.error(f"Unable to verify channel membership: {e}")
-            await callback_query.answer("❌ Error verifying channel membership. Please try again.", show_alert=True)
+            logger.error(f"Unable to verify channel membership for {user_id}: {e}")
+            await callback_query.answer("❌ Please make sure you've joined the channel and try again.", show_alert=True)
             
     except Exception as e:
-        logging.error(f"Error in check_subscription: {e}")
+        logger.error(f"Error in check_subscription: {e}")
         await callback_query.answer("Error processing your request.", show_alert=True)
 
 # Resolution selected handler - Now show episode list
@@ -213,7 +232,7 @@ async def resolution_selected(client, callback_query):
         await episodes.list_series(client, callback_query, encoded_name, series_name, resolution, 0)
         
     except Exception as e:
-        logging.error(f"Error in resolution_selected: {e}")
+        logger.error(f"Error in resolution_selected: {e}")
         await callback_query.answer("Error loading episodes.", show_alert=True)
 
 if __name__ == "__main__":
