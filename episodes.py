@@ -3,6 +3,10 @@ from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from shared import app, ADMINS, DATABASE_CHANNEL
 from utils import decode_series_name
 from database import cursor
+import logging
+
+# Add logging
+logger = logging.getLogger(__name__)
 
 def format_episode_button(episode_data, index):
     """Format episode button with enhanced metadata"""
@@ -86,7 +90,7 @@ async def list_series(client, callback_query, encoded_name, series_name, resolut
         )
         
     except Exception as e:
-        logging.error(f"Error in list_series: {e}")
+        logger.error(f"Error in list_series: {e}")
         await callback_query.answer("Error loading episodes.", show_alert=True)
 
 # Handle pagination callbacks
@@ -101,7 +105,7 @@ async def handle_list_callback(client, callback_query):
         await list_series(client, callback_query, encoded_name, series_name, resolution, page)
         
     except Exception as e:
-        logging.error(f"Error in handle_list_callback: {e}")
+        logger.error(f"Error in handle_list_callback: {e}")
         await callback_query.answer("Error loading page.", show_alert=True)
 
 # Handle back to resolutions
@@ -143,7 +147,7 @@ async def back_to_resolutions(client, callback_query):
         )
         
     except Exception as e:
-        logging.error(f"Error in back_to_resolutions: {e}")
+        logger.error(f"Error in back_to_resolutions: {e}")
         await callback_query.answer("Error going back.", show_alert=True)
 
 # Send selected episode with enhanced info - FIXED FILE SENDING
@@ -175,17 +179,37 @@ async def send_episode(client, callback_query):
         if caption:
             enhanced_caption += f"\n\n{caption}"
 
-        # Send file directly to user
-        await client.send_document(
-            chat_id=callback_query.from_user.id, 
-            document=file_id, 
-            caption=enhanced_caption,
-            parse_mode=enums.ParseMode.MARKDOWN
-        )
-        await callback_query.answer("✅ Episode sent to your DM!")
+        # Send file directly to user with error handling
+        try:
+            await client.send_document(
+                chat_id=callback_query.from_user.id, 
+                document=file_id, 
+                caption=enhanced_caption,
+                parse_mode=enums.ParseMode.MARKDOWN
+            )
+            await callback_query.answer("✅ Episode sent to your DM!")
+        except Exception as send_error:
+            logger.error(f"Failed to send file to user: {send_error}")
+            # If DM fails, try to send in the current chat
+            try:
+                await callback_query.message.reply(
+                    "⚠️ Couldn't send to DM. Sending here:",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("Start Bot for DM", url=f"https://t.me/{app.me.username}")]
+                    ])
+                )
+                await client.send_document(
+                    chat_id=callback_query.message.chat.id, 
+                    document=file_id, 
+                    caption=enhanced_caption,
+                    parse_mode=enums.ParseMode.MARKDOWN
+                )
+            except Exception as fallback_error:
+                logger.error(f"Fallback send also failed: {fallback_error}")
+                await callback_query.answer("❌ Failed to send file. Please start the bot first!", show_alert=True)
         
     except Exception as e:
-        logging.error(f"Error sending file: {e}")
+        logger.error(f"Error sending file: {e}")
         await callback_query.answer("❌ Failed to send file. Please start a conversation with the bot first!", show_alert=True)
 
 # Handle none callback (page number button)
