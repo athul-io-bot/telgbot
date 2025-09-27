@@ -7,44 +7,50 @@ logger = logging.getLogger(__name__)
 
 load_dotenv()
 
+# Environment variables (with safe casting & validation)
 API_ID = os.getenv("API_ID")
+if API_ID is not None and API_ID != "":
+    try:
+        API_ID = int(API_ID)
+    except ValueError:
+        logger.error("API_ID must be an integer. Got: %r", API_ID)
+        raise
+
 API_HASH = os.getenv("API_HASH")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+
 SPONSOR_CHANNEL = os.getenv("SPONSOR_CHANNEL")
 DATABASE_CHANNEL = os.getenv("DATABASE_CHANNEL")
 MAIN_CHANNEL = os.getenv("MAIN_CHANNEL")
+
+# ADMINS: comma separated user ids
 ADMINS_STR = os.getenv("ADMINS", "")
-
-# Validate required variables and improve error message
-missing_vars = [var for var in ["API_ID", "API_HASH", "BOT_TOKEN"] if not globals()[var]]
-if missing_vars:
-    raise ValueError(f"Missing required environment variables: {', '.join(missing_vars)}")
-
-try:
-    API_ID = int(API_ID)
-except ValueError:
-    raise ValueError("API_ID must be a valid integer")
-
 ADMINS = []
 if ADMINS_STR:
     try:
-        ADMINS = list(map(int, ADMINS_STR.split(",")))
-    except ValueError:
-        raise ValueError("ADMINS must be comma-separated integers")
-if not ADMINS:
-    logger.warning("ADMINS list is empty. No one can run admin commands.")
+        ADMINS = [int(x.strip()) for x in ADMINS_STR.split(",") if x.strip()]
+    except Exception as e:
+        logger.error("ADMINS must be comma-separated integers. Error: %s", e)
+        raise
+
+# normalize channel identifiers (strip leading @ or convert to int when possible)
+def _normalize_channel(val):
+    if not val:
+        return None
+    val = val.strip()
+    if val.startswith("@"):
+        val = val.lstrip("@")
+    try:
+        return int(val)
+    except Exception:
+        return val  # keep as username string without @
 
 if SPONSOR_CHANNEL:
-    SPONSOR_CHANNEL = SPONSOR_CHANNEL.lstrip('@')
+    SPONSOR_CHANNEL = _normalize_channel(SPONSOR_CHANNEL)
 if DATABASE_CHANNEL:
-    DATABASE_CHANNEL = DATABASE_CHANNEL.lstrip('@')
+    DATABASE_CHANNEL = _normalize_channel(DATABASE_CHANNEL)
 if MAIN_CHANNEL:
-    MAIN_CHANNEL = MAIN_CHANNEL.lstrip('@')
+    MAIN_CHANNEL = _normalize_channel(MAIN_CHANNEL)
 
-app = Client(
-    "tvseriesbot",
-    api_id=API_ID,
-    api_hash=API_HASH,
-    bot_token=BOT_TOKEN,
-    plugins=dict(root="plugins")
-)
+# Create app instance (pyrogram expects api_id to be int or None)
+app = Client("tv_series_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
