@@ -66,7 +66,10 @@ async def main():
         
         # Run the bot
         await app.start()
-        await app.idle()
+        
+        # Keep the bot running
+        import pyrogram
+        await pyrogram.idle()
         
     except KeyboardInterrupt:
         print("\n📴 Bot stopped by user")

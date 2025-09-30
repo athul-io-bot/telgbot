@@ -46,23 +46,20 @@ async def start_handler(client, message):
             await handle_series_start(client, message, encoded_name)
             return
     
-    welcome_text = f"""Welcome to TV Series Bot, {user.first_name}!
+    welcome_text = f"""Welcome to @Request_rawbot, {user.first_name}❗
 
-I help you download TV series episodes easily and quickly.
+This bot help you download TV series episodes easily and quickly.
 
-**Features:**
 • Browse available series
 • Multiple resolutions (480p, 720p, 1080p)
-• Fast direct downloads
-• Mobile optimized
 
 {"**Admin Mode Activated**" if is_admin else ""}
 
 Use the buttons below to get started!"""
 
     keyboard = [
-        [InlineKeyboardButton("Browse Series", callback_data="browse_series")],
-        [InlineKeyboardButton("Help", callback_data="show_help")]
+        [InlineKeyboardButton("🔎Browse Series", callback_data="browse_series")],
+        [InlineKeyboardButton("⭕Help", callback_data="show_help")]
     ]
     
     if is_admin:
@@ -99,6 +96,10 @@ async def handle_series_start(client, message, encoded_name):
                     return
             except Exception as e:
                 logger.warning(f"Could not check membership for {user_id}: {e}")
+                # If sponsor channel is invalid/inaccessible, skip the requirement
+                logger.info(f"Skipping sponsor channel requirement due to channel access issue")
+                await send_resolutions_message(client, message, encoded_name, series_name)
+                return
 
             # Ask user to join channel
             await ask_to_join_sponsor(client, message, encoded_name, series_name)
@@ -136,7 +137,9 @@ async def ask_to_join_sponsor(client, message, encoded_name, series_name):
         
     except Exception as e:
         logger.error(f"Error asking to join sponsor: {e}")
-        await message.reply("Error processing your request. Please try again.")
+        # If sponsor channel is inaccessible, skip requirement and show resolutions
+        logger.info(f"Sponsor channel inaccessible, skipping requirement for {series_name}")
+        await send_resolutions_message(client, message, encoded_name, series_name)
 
 async def send_resolutions_message(client, message, encoded_name, series_name):
     """Send resolutions selection message"""
@@ -331,6 +334,10 @@ async def series_selected_handler(client, callback_query):
                     return
             except Exception as e:
                 logger.warning(f"Could not check membership: {e}")
+                # If sponsor channel is invalid/inaccessible, skip the requirement
+                logger.info(f"Skipping sponsor channel requirement for callback due to channel access issue")
+                await episodes.show_resolutions(client, callback_query, encoded_name, series_name)
+                return
 
             # Ask user to join channel
             try:
@@ -373,7 +380,9 @@ async def series_selected_handler(client, callback_query):
                     await callback_query.answer()
             except Exception as e:
                 logger.error(f"Error sending join request: {e}")
-                await callback_query.answer("Error processing request", show_alert=True)
+                # If sponsor channel is inaccessible, skip requirement and show resolutions
+                logger.info(f"Sponsor channel inaccessible, skipping requirement for callback")
+                await episodes.show_resolutions(client, callback_query, encoded_name, series_name)
         else:
             # No sponsor channel required
             await episodes.show_resolutions(client, callback_query, encoded_name, series_name)
@@ -402,7 +411,11 @@ async def check_subscription_handler(client, callback_query):
             else:
                 await callback_query.answer("Please join the channel first!", show_alert=True)
         except Exception as e:
-            await callback_query.answer("Error verifying subscription", show_alert=True)
+            logger.warning(f"Error verifying subscription: {e}")
+            # If sponsor channel is inaccessible, skip requirement and show resolutions
+            logger.info(f"Sponsor channel inaccessible, granting access for check handler")
+            await callback_query.answer("Access granted!", show_alert=True)
+            await episodes.show_resolutions(client, callback_query, encoded_name, series_name)
             
     except Exception as e:
         logger.error(f"Error checking subscription: {e}")
@@ -446,23 +459,20 @@ async def main_menu_handler(client, callback_query):
     user = callback_query.from_user
     is_admin = user.id in ADMINS
     
-    welcome_text = f"""Welcome to TV Series Bot, {user.first_name}!
+    welcome_text = f"""Welcome to @Request_rawbot, {user.first_name}❗
 
-I help you download TV series episodes easily and quickly.
+This bot help you download TV series episodes easily and quickly.
 
-**Features:**
 • Browse available series
 • Multiple resolutions (480p, 720p, 1080p)
-• Fast direct downloads
-• Mobile optimized
 
 {"**Admin Mode Activated**" if is_admin else ""}
 
 Use the buttons below to get started!"""
 
     keyboard = [
-        [InlineKeyboardButton("Browse Series", callback_data="browse_series")],
-        [InlineKeyboardButton("Help", callback_data="show_help")]
+        [InlineKeyboardButton("🔎Browse Series", callback_data="browse_series")],
+        [InlineKeyboardButton("⭕Help", callback_data="show_help")]
     ]
     
     if is_admin:
@@ -477,186 +487,8 @@ Use the buttons below to get started!"""
     except MessageNotModified:
         pass
 
-@app.on_message(filters.command("debug") & filters.private)
-async def debug_handler(client, message):
-    """Debug command to check mappings (Admin only)"""
-    if message.from_user.id not in ADMINS:
-        return
-    
-    try:
-        # Show all series and their mappings
-        cursor.execute("SELECT series_name FROM files GROUP BY series_name")
-        series_in_files = cursor.fetchall()
-        
-        cursor.execute("SELECT hash, series_name FROM series_mapping")
-        mappings = cursor.fetchall()
-        
-        debug_text = "**Debug Information:**\n\n"
-        debug_text += f"**Series in files table:**\n"
-        for (series_name,) in series_in_files:
-            debug_text += f"• {series_name}\n"
-        
-        debug_text += f"\n**Hash mappings:**\n"
-        for hash_val, series_name in mappings:
-            debug_text += f"• {hash_val} -> {series_name}\n"
-        
-        # Test encoding/decoding for each series
-        debug_text += f"\n**Encoding test:**\n"
-        for (series_name,) in series_in_files:
-            encoded = encode_series_name(series_name)
-            decoded = decode_series_name(encoded)
-            debug_text += f"• {series_name} -> {encoded} -> {decoded}\n"
-        
-        await message.reply(debug_text, parse_mode=enums.ParseMode.MARKDOWN)
-        
-    except Exception as e:
-        await message.reply(f"Debug error: {str(e)}")
 
-@app.on_message(filters.command("fixmappings") & filters.private)
-async def fix_mappings_handler(client, message):
-    """Fix series mappings (Admin only)"""
-    if message.from_user.id not in ADMINS:
-        return
-    
-    try:
-        # First, clean up old mappings
-        cursor.execute("DELETE FROM series_mapping")
-        conn.commit()
-        
-        # Get all unique series names from files
-        cursor.execute("SELECT DISTINCT series_name FROM files")
-        series_list = cursor.fetchall()
-        
-        fixed_count = 0
-        for (series_name,) in series_list:
-            encoded_name = encode_series_name(series_name)
-            store_series_mapping(series_name, encoded_name)
-            fixed_count += 1
-        
-        await message.reply(f"Cleaned and regenerated {fixed_count} series mappings")
-        
-    except Exception as e:
-        await message.reply(f"Error fixing mappings: {str(e)}")
 
-@app.on_message(filters.command("teststart") & filters.private)
-async def test_start_handler(client, message):
-    """Test start parameter parsing (Admin only)"""
-    if message.from_user.id not in ADMINS:
-        return
-    
-    if len(message.command) > 1:
-        param = message.command[1]
-        await message.reply(f"Received parameter: '{param}'\nLength: {len(param)}")
-        
-        if param.startswith("series_"):
-            encoded_name = param.replace("series_", "")
-            await message.reply(f"Extracted encoded name: '{encoded_name}'")
-            
-            series_name = decode_series_name(encoded_name)
-            await message.reply(f"Decoded series name: '{series_name}'")
-    else:
-        await message.reply("No parameter received")
-
-@app.on_message(filters.command("testdb") & filters.private)
-async def test_db_handler(client, message):
-    """Test database lookup directly (Admin only)"""
-    if message.from_user.id not in ADMINS:
-        return
-    
-    test_hash = "fju-cdsP9_TwA6pY7_JZw"
-    
-    try:
-        # Test exact database lookup
-        cursor.execute("SELECT series_name FROM series_mapping WHERE hash = ?", (test_hash,))
-        result = cursor.fetchone()
-        
-        if result:
-            await message.reply(f"✅ Found: '{test_hash}' -> '{result[0]}'")
-        else:
-            await message.reply(f"❌ Not found: '{test_hash}'")
-            
-            # Show all hashes in database
-            cursor.execute("SELECT hash, series_name FROM series_mapping")
-            all_results = cursor.fetchall()
-            
-            response = "All hashes in database:\n"
-            for hash_val, name in all_results:
-                response += f"• '{hash_val}' -> '{name}'\n"
-                response += f"  Length: {len(hash_val)}\n"
-                response += f"  Match test: {hash_val == test_hash}\n\n"
-            
-            await message.reply(response)
-            
-    except Exception as e:
-        await message.reply(f"Database error: {str(e)}")
-
-@app.on_message(filters.command("fixhash") & filters.private)
-async def fix_hash_handler(client, message):
-    """Fix hash issue (Admin only)"""
-    if message.from_user.id not in ADMINS:
-        return
-    
-    try:
-        # Get the series name
-        series_name = "Alien Earth"
-        
-        # Delete all existing mappings for this series
-        cursor.execute("DELETE FROM series_mapping WHERE series_name = ?", (series_name,))
-        
-        # Generate a simple hash without special characters that might cause URL issues
-        import hashlib
-        simple_hash = hashlib.md5(series_name.encode()).hexdigest()[:12]
-        
-        # Store the new mapping
-        cursor.execute("INSERT INTO series_mapping (hash, series_name) VALUES (?, ?)", (simple_hash, series_name))
-        conn.commit()
-        
-        await message.reply(f"Fixed hash for '{series_name}': {simple_hash}")
-        
-        # Test the new hash
-        test_decode = decode_series_name(simple_hash)
-        await message.reply(f"Test decode: {simple_hash} -> {test_decode}")
-        
-    except Exception as e:
-        await message.reply(f"Error: {str(e)}")
-
-@app.on_message(filters.command("checkfiles") & filters.private)
-async def check_files_handler(client, message):
-    """Check what files exist for a series (Admin only)"""
-    if message.from_user.id not in ADMINS:
-        return
-    
-    if len(message.command) < 2:
-        await message.reply('Usage: `/checkfiles "Series Name"`')
-        return
-    
-    series_name = message.text.split(" ", 1)[1].strip().strip('"')
-    
-    try:
-        cursor.execute("""
-            SELECT id, message_id, season, episode, resolution, file_type, created_at
-            FROM files 
-            WHERE series_name = ?
-            ORDER BY resolution, season, episode
-        """, (series_name,))
-        
-        results = cursor.fetchall()
-        
-        if not results:
-            await message.reply(f"No files found for '{series_name}'")
-            return
-        
-        response = f"Files for '{series_name}':\n\n"
-        for row in results:
-            file_id, msg_id, season, episode, resolution, file_type, created_at = row
-            response += f"• ID: {file_id} | Msg: {msg_id}\n"
-            response += f"  {season}{episode} | {resolution} | {file_type}\n"
-            response += f"  Created: {created_at}\n\n"
-        
-        await message.reply(response)
-        
-    except Exception as e:
-        await message.reply(f"Error: {str(e)}")
 
 @app.on_message(filters.command("sendseries") & filters.private)
 async def send_series_handler(client, message):
@@ -694,10 +526,7 @@ async def send_series_handler(client, message):
         ]])
         
         caption = f"""**{series_name}**
-
-Complete Series Available
-{file_count} Episodes • Multiple Qualities
-Easy to Download
+🍿Multiple Qualities🍿
 
 Tap **Download** to get started"""
 
@@ -723,6 +552,55 @@ Tap **Download** to get started"""
     except Exception as e:
         logger.error(f"Error sending series: {e}")
         await message.reply(f"Error: {str(e)}")
+
+@app.on_message(filters.command("commands") & filters.private)
+async def commands_handler(client, message):
+    """Show all available bot commands"""
+    user = message.from_user
+    is_admin = user.id in ADMINS
+    
+    user_commands = """**📋 Available Commands**
+
+**👤 User Commands:**
+• `/start` - Start the bot and browse series
+• `/help` - Show help and bot information
+• `/commands` - Show this commands list
+
+**📺 How to Use:**
+1. Use /start to see all available series
+2. Select a series to view available resolutions
+3. Choose your preferred quality
+4. Episodes will be sent to your DM
+
+**Features:**
+• Multiple resolutions (480p, 720p, 1080p)
+• Fast downloads
+• Mobile optimized"""
+
+    admin_commands = """
+
+**🔧 Admin Commands:**
+• `/addfile` - Add new files to series
+• `/files` - View all files in database
+• `/stats` - View bot statistics
+• `/delete_series` - Remove a series and all its files
+• `/sendseries` - Post series to main channel
+
+**Admin Usage:**
+• Reply to a file with `/addfile Series Name | S01E01 | 720p`
+• Use `/delete_series "Series Name"` to remove series
+• Use `/sendseries "Series Name"` to post to channel"""
+
+    commands_text = user_commands
+    if is_admin:
+        commands_text += admin_commands
+
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🏠 Main Menu", callback_data="main_menu")],
+        [InlineKeyboardButton("📺 Browse Series", callback_data="browse_series")]
+    ])
+
+    await message.reply(commands_text, parse_mode=enums.ParseMode.MARKDOWN, reply_markup=keyboard)
 
 if __name__ == "__main__":
     logger.info("TV Series Bot starting...")

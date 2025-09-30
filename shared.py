@@ -1,5 +1,5 @@
 import os
-from pyrogram import Client
+from pyrogram.client import Client
 from dotenv import load_dotenv
 import logging
 
@@ -53,4 +53,5 @@ if MAIN_CHANNEL:
     MAIN_CHANNEL = _normalize_channel(MAIN_CHANNEL)
 
 # Create app instance (pyrogram expects api_id to be int or None)
+# Always create the client to avoid None type errors, validation happens at runtime
 app = Client("tv_series_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)

@@ -119,52 +119,42 @@ async def send_all_episodes(client, user_id, series_name, resolution):
             message_id, file_id, caption, season, episode, file_type, file_size, duration = episode_data
             
             # Build caption for user
-            file_caption = f"**{series_name}**\n"
+            file_caption = f"**{series_name}** "
             if season and episode:
-                file_caption += f"{season}{episode}\n"
+                file_caption += f"{season}{episode} "
             elif season:
-                file_caption += f"{season}\n"
+                file_caption += f"{season} "
             elif episode:
-                file_caption += f"{episode}\n"
+                file_caption += f"{episode} "
             
-            file_caption += f"Resolution: {resolution}\n"
-            
-            if file_size:
-                file_caption += f"Size: {file_size}\n"
-            if duration:
-                file_caption += f"Duration: {duration}\n"
-            
-            file_caption += f"\nDownloaded via @{client.me.username}"
+            file_caption += f"{resolution}\n"      
+            file_caption += f"via @{client.me.username}"
             
             try:
-                # Forward message from database channel with retry logic
+                # Copy message from database channel to remove "Forwarded from" badge
                 max_retries = 3
+                sent_message = None
+                
+                # Retry only the copying operation
                 for retry in range(max_retries):
                     try:
-                        # Forward the message from database channel
-                        forwarded = await client.forward_messages(
+                        # Copy the message from database channel without forwarding badge
+                        sent_message = await client.copy_message(
                             chat_id=user_id,
                             from_chat_id=DATABASE_CHANNEL,
-                            message_ids=message_id
+                            message_id=message_id,
+                            caption=file_caption,
+                            parse_mode=enums.ParseMode.MARKDOWN
                         )
                         
-                        # Try to edit caption if forwarded successfully
-                        if forwarded and len(forwarded) > 0:
-                            try:
-                                await client.edit_message_caption(
-                                    chat_id=user_id,
-                                    message_id=forwarded[0].id,
-                                    caption=file_caption,
-                                    parse_mode=enums.ParseMode.MARKDOWN
-                                )
-                            except Exception as caption_error:
-                                logger.warning(f"Could not edit caption: {caption_error}")
-                        
-                        break
+                        # If copying succeeded, break out of retry loop
+                        if sent_message:
+                            break
+                            
                     except FloodWait as e:
                         if retry == max_retries - 1:
                             raise e
-                        wait_time = e.value
+                        wait_time = int(e.value) if hasattr(e, 'value') else 60
                         logger.info(f"Flood wait for {wait_time} seconds, retrying...")
                         await asyncio.sleep(wait_time)
                     except Exception as e:
@@ -200,11 +190,7 @@ async def send_all_episodes(client, user_id, series_name, resolution):
         # Send completion message
         if sent_count > 0:
             success_message = (
-                f"**Download Complete!**\n\n"
-                f"**Series:** {series_name}\n"
-                f"**Resolution:** {resolution}\n"
-                f"**Successfully sent:** {sent_count}/{total_episodes} episodes\n"
-                f"**Failed:** {errors} episodes\n\n"
+                f"**Forwarded!**\n"
             )
             
             if errors > 0:
@@ -245,10 +231,8 @@ async def resolution_handler(client, callback_query):
         # Edit message to show processing
         try:
             await callback_query.message.edit_text(
-                f"**{series_name}**\nResolution: {resolution}\n\n"
-                f"Starting download...\n\n"
-                f"Please wait while we send all episodes to your DM.\n"
-                f"This may take a few minutes...",
+                f"**{series_name}**\nResolution: {resolution}",
+           
                 parse_mode=enums.ParseMode.MARKDOWN
             )
         except MessageNotModified:
